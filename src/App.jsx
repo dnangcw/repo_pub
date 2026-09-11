@@ -33,6 +33,37 @@ const FONT_IMPORT = "@import url('https://fonts.googleapis.com/css2?family=IBM+P
 const DEFAULT_SETTINGS = { buyFeePct: 0.15, sellFeePct: 0.25 };
 
 /* ---------------------------------------------------------------------- */
+/*  Universal key-value storage                                           */
+/*  Uses Claude Artifacts' window.storage when available (inside Claude), */
+/*  otherwise falls back to the browser's built-in localStorage so the    */
+/*  app also works when deployed standalone (Netlify, Vercel, dll).       */
+/* ---------------------------------------------------------------------- */
+const hasArtifactStorage = () =>
+  typeof window !== "undefined" && window.storage && typeof window.storage.get === "function";
+
+async function storageGet(key) {
+  if (hasArtifactStorage()) {
+    try { return await window.storage.get(key, false); } catch (e) { return null; }
+  }
+  try {
+    const v = window.localStorage.getItem(key);
+    return v !== null ? { key, value: v } : null;
+  } catch (e) { return null; }
+}
+async function storageSet(key, value) {
+  if (hasArtifactStorage()) {
+    try { return await window.storage.set(key, value, false); } catch (e) { return null; }
+  }
+  try { window.localStorage.setItem(key, value); return { key, value }; } catch (e) { return null; }
+}
+async function storageDelete(key) {
+  if (hasArtifactStorage()) {
+    try { return await window.storage.delete(key, false); } catch (e) { return null; }
+  }
+  try { window.localStorage.removeItem(key); return { key, deleted: true }; } catch (e) { return null; }
+}
+
+/* ---------------------------------------------------------------------- */
 /*  Shared helpers                                                         */
 /* ---------------------------------------------------------------------- */
 const rp = (n) => {
@@ -109,7 +140,7 @@ async function createLocalBackend() {
   const SQL = await window.initSqlJs({ locateFile: () => SQLJS_WASM });
   let bytes = null;
   try {
-    const r = await window.storage.get(LOCAL_DB_KEY, false);
+    const r = await storageGet(LOCAL_DB_KEY);
     if (r && r.value) bytes = base64ToUint8(r.value);
   } catch (e) { /* fresh db */ }
   const db = bytes ? new SQL.Database(bytes) : new SQL.Database();
@@ -118,7 +149,7 @@ async function createLocalBackend() {
     db.run("INSERT INTO settings (key,value) VALUES ('buyFeePct','0.15'),('sellFeePct','0.25')");
   }
   const persist = async () => {
-    try { await window.storage.set(LOCAL_DB_KEY, uint8ToBase64(db.export()), false); } catch (e) { /* ignore */ }
+    try { await storageSet(LOCAL_DB_KEY, uint8ToBase64(db.export())); } catch (e) { /* ignore */ }
   };
   return {
     type: "local",
@@ -331,7 +362,7 @@ export default function App() {
       try {
         let cfg = null;
         try {
-          const r = await window.storage.get(CLOUD_CONFIG_KEY, false);
+          const r = await storageGet(CLOUD_CONFIG_KEY);
           if (r && r.value) cfg = JSON.parse(r.value);
         } catch (e) { /* no cloud config saved */ }
         if (cfg && cfg.url && cfg.key) {
@@ -378,12 +409,12 @@ export default function App() {
       await cloud.setSetting("buyFeePct", DEFAULT_SETTINGS.buyFeePct);
       await cloud.setSetting("sellFeePct", DEFAULT_SETTINGS.sellFeePct);
     }
-    await window.storage.set(CLOUD_CONFIG_KEY, JSON.stringify(cfg), false);
+    await storageSet(CLOUD_CONFIG_KEY, JSON.stringify(cfg));
     setBackend(cloud); setBackendType("cloud"); setCloudConfig(cfg);
     await refresh(cloud);
   };
   const disconnectCloud = async () => {
-    try { await window.storage.delete(CLOUD_CONFIG_KEY, false); } catch (e) { /* ignore */ }
+    try { await storageDelete(CLOUD_CONFIG_KEY); } catch (e) { /* ignore */ }
     setCloudConfig(null);
     const local = await createLocalBackend();
     setBackend(local); setBackendType("local");
