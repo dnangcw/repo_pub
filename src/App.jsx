@@ -341,6 +341,7 @@ export default function App() {
   const [showReset, setShowReset] = useState(false);
   const [actionError, setActionError] = useState("");
   const [quickAddType, setQuickAddType] = useState(null); // null | 'BUY' | 'SELL'
+  const [quickAddPrefill, setQuickAddPrefill] = useState(null);
 
   const applyData = useCallback((data) => {
     setTransactions(data.transactions || []);
@@ -446,6 +447,11 @@ export default function App() {
       .map((c) => ({ label: `${c.code} (${fmtDateShort(c.sellDate)})`, value: Math.round(c.netProfit) }))
   ), [closed]);
 
+  const openQuickSell = (holding) => {
+    setQuickAddPrefill({ code: holding.code, lot: holding.lot, price: holding.currentPrice || holding.avgPrice });
+    setQuickAddType("SELL");
+  };
+
   if (status === "loading") {
     return (
       <div className="min-h-screen w-full flex items-center justify-center gap-2" style={{ background: COLORS.bg, color: COLORS.textDim }}>
@@ -517,11 +523,11 @@ export default function App() {
       </div>
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
-        {tab === "dashboard" && <DashboardTab totals={totals} holdings={holdings} tradePL={tradePL} settings={settings} onSetPrice={setPrice} onGoPortfolio={() => setTab("portfolio")} />}
-        {tab === "portfolio" && <PortfolioTab holdings={holdings} prices={prices} onSetPrice={setPrice} />}
+        {tab === "dashboard" && <DashboardTab totals={totals} holdings={holdings} tradePL={tradePL} settings={settings} onSetPrice={setPrice} onSell={openQuickSell} onGoPortfolio={() => setTab("portfolio")} />}
+        {tab === "portfolio" && <PortfolioTab holdings={holdings} prices={prices} onSetPrice={setPrice} onSell={openQuickSell} />}
         {tab === "journal" && <JournalTab transactions={transactions} onAdd={addTransaction} onDelete={deleteTransaction} settings={settings} onOpenSettings={() => setShowSettings(true)} />}
         {tab === "closed" && <ClosedTab closed={closed} />}
-        {tab === "cash" && <CashDividendTab cashflows={cashflows} onAddCashflow={addCashflow} onDeleteCashflow={deleteCashflow} dividends={dividends} onAddDividend={addDividend} onDeleteDividend={deleteDividend} />}
+        {tab === "cash" && <CashDividendTab cashflows={cashflows} onAddCashflow={addCashflow} onDeleteCashflow={deleteCashflow} dividends={dividends} onAddDividend={addDividend} onDeleteDividend={deleteDividend} cashBalance={totals.cashBalance} />}
 
         <div className="mt-10 flex justify-center">
           {!showReset ? (
@@ -537,9 +543,9 @@ export default function App() {
       </div>
 
       {/* Floating quick-add buttons */}
-      <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-20">
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex flex-row gap-4 z-20">
         <button
-          onClick={() => setQuickAddType("SELL")}
+          onClick={() => { setQuickAddPrefill(null); setQuickAddType("SELL"); }}
           title="Tambah transaksi jual"
           className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg"
           style={{ background: COLORS.loss, color: "#2A0007" }}
@@ -547,7 +553,7 @@ export default function App() {
           <Minus className="w-5 h-5" strokeWidth={3} />
         </button>
         <button
-          onClick={() => setQuickAddType("BUY")}
+          onClick={() => { setQuickAddPrefill(null); setQuickAddType("BUY"); }}
           title="Tambah transaksi beli"
           className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg"
           style={{ background: COLORS.brand, color: "#04170A" }}
@@ -559,9 +565,10 @@ export default function App() {
       {quickAddType && (
         <QuickAddModal
           type={quickAddType}
+          prefill={quickAddPrefill}
           settings={settings}
-          onClose={() => setQuickAddType(null)}
-          onSubmit={(t) => { addTransaction(t); setQuickAddType(null); }}
+          onClose={() => { setQuickAddType(null); setQuickAddPrefill(null); }}
+          onSubmit={(t) => { addTransaction(t); setQuickAddType(null); setQuickAddPrefill(null); }}
         />
       )}
     </div>
@@ -571,12 +578,18 @@ export default function App() {
 /* ---------------------------------------------------------------------- */
 /*  Quick-add transaction modal (floating + / -)                           */
 /* ---------------------------------------------------------------------- */
-function QuickAddModal({ type, settings, onClose, onSubmit }) {
+function QuickAddModal({ type, settings, prefill, onClose, onSubmit }) {
   const isBuy = type === "BUY";
   const accent = isBuy ? COLORS.brand : COLORS.loss;
   const accentSoft = isBuy ? "rgba(34,197,94,0.10)" : "rgba(240,71,92,0.10)";
   const today = new Date().toISOString().slice(0, 10);
-  const [form, setForm] = useState({ date: today, code: "", price: "", lot: "", note: "" });
+  const [form, setForm] = useState({
+    date: today,
+    code: prefill?.code || "",
+    price: prefill?.price ? String(Math.round(prefill.price)) : "",
+    lot: prefill?.lot ? String(prefill.lot) : "",
+    note: "",
+  });
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const feePct = isBuy ? settings.buyFeePct : settings.sellFeePct;
   const gross = (Number(form.price) || 0) * (Number(form.lot) || 0) * 100;
@@ -695,7 +708,7 @@ function CloudSettingsPanel({ backendType, cloudConfig, onConnect, onDisconnect 
 /* ---------------------------------------------------------------------- */
 /*  Dashboard                                                              */
 /* ---------------------------------------------------------------------- */
-function DashboardTab({ totals, holdings, tradePL, settings, onGoPortfolio }) {
+function DashboardTab({ totals, holdings, tradePL, settings, onSell, onGoPortfolio }) {
   const pieData = holdings.map((h) => ({ name: h.code, value: Math.round(h.marketValue) }));
   const topHoldings = holdings.slice(0, 5);
   return (
@@ -721,7 +734,12 @@ function DashboardTab({ totals, holdings, tradePL, settings, onGoPortfolio }) {
                   <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
                     {pieData.map((_, i) => <Cell key={i} fill={PIE_PALETTE[i % PIE_PALETTE.length]} stroke={COLORS.panel} />)}
                   </Pie>
-                  <Tooltip contentStyle={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 8, fontSize: 12 }} formatter={(v) => rp(v)} />
+                  <Tooltip
+                    contentStyle={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.brand}`, borderRadius: 8, fontSize: 12, padding: "8px 12px", boxShadow: "0 4px 16px rgba(0,0,0,0.4)" }}
+                    itemStyle={{ color: COLORS.text, fontWeight: 600 }}
+                    labelStyle={{ color: COLORS.text }}
+                    formatter={(v) => rp(v)}
+                  />
                   <Legend wrapperStyle={{ fontSize: 12, color: COLORS.textDim }} />
                 </PieChart>
               </ResponsiveContainer>
@@ -762,7 +780,7 @@ function DashboardTab({ totals, holdings, tradePL, settings, onGoPortfolio }) {
         </div>
         {topHoldings.length === 0 ? <EmptyState text="Belum ada posisi saham." /> : (
           <table className="w-full border-collapse">
-            <thead><tr><Th>Kode</Th><Th align="right">Lot</Th><Th align="right">Avg Price</Th><Th align="right">Harga Skrg</Th><Th align="right">Modal (Rp)</Th><Th align="right">Unrealized P/L</Th></tr></thead>
+            <thead><tr><Th>Kode</Th><Th align="right">Lot</Th><Th align="right">Avg Price</Th><Th align="right">Harga Skrg</Th><Th align="right">Modal (Rp)</Th><Th align="right">Unrealized P/L</Th><Th align="right">Aksi</Th></tr></thead>
             <tbody>
               {topHoldings.map((h) => (
                 <tr key={h.code} style={{ borderBottom: `1px solid ${COLORS.borderSoft}` }}>
@@ -772,6 +790,9 @@ function DashboardTab({ totals, holdings, tradePL, settings, onGoPortfolio }) {
                   <Td align="right" mono>{rp(h.currentPrice)}</Td>
                   <Td align="right" mono>{rp(h.cost)}</Td>
                   <Td align="right" mono><span style={{ color: h.unrealized >= 0 ? COLORS.profit : COLORS.loss }}>{rp(h.unrealized)}</span></Td>
+                  <Td align="right">
+                    <button onClick={() => onSell(h)} className="px-2 py-1 rounded text-xs font-medium" style={{ background: "rgba(240,71,92,0.12)", color: COLORS.loss }}>Jual</button>
+                  </Td>
                 </tr>
               ))}
             </tbody>
@@ -785,14 +806,14 @@ function DashboardTab({ totals, holdings, tradePL, settings, onGoPortfolio }) {
 /* ---------------------------------------------------------------------- */
 /*  Portfolio                                                              */
 /* ---------------------------------------------------------------------- */
-function PortfolioTab({ holdings, prices, onSetPrice }) {
+function PortfolioTab({ holdings, prices, onSetPrice, onSell }) {
   const [edit, setEdit] = useState({});
   const commit = (code) => { const val = edit[code]; if (val === undefined || val === "") return; onSetPrice(code, Number(val)); };
   if (holdings.length === 0) return <Panel className="p-8"><EmptyState text="Belum ada saham yang dipegang. Tambahkan transaksi beli di tab Jurnal Transaksi." /></Panel>;
   return (
     <Panel className="overflow-x-auto">
-      <table className="w-full border-collapse min-w-[820px]">
-        <thead><tr><Th>Kode</Th><Th align="right">Lot</Th><Th align="right">Lembar</Th><Th align="right">Avg Price</Th><Th align="right">Modal</Th><Th align="right">Harga Saat Ini</Th><Th align="right">Nilai Pasar</Th><Th align="right">Unrealized P/L</Th><Th align="right">Unrealized %</Th></tr></thead>
+      <table className="w-full border-collapse min-w-[880px]">
+        <thead><tr><Th>Kode</Th><Th align="right">Lot</Th><Th align="right">Lembar</Th><Th align="right">Avg Price</Th><Th align="right">Modal</Th><Th align="right">Harga Saat Ini</Th><Th align="right">Nilai Pasar</Th><Th align="right">Unrealized P/L</Th><Th align="right">Unrealized %</Th><Th align="right">Aksi</Th></tr></thead>
         <tbody>
           {holdings.map((h) => (
             <tr key={h.code} style={{ borderBottom: `1px solid ${COLORS.borderSoft}` }}>
@@ -805,6 +826,9 @@ function PortfolioTab({ holdings, prices, onSetPrice }) {
               <Td align="right" mono>{rp(h.marketValue)}</Td>
               <Td align="right" mono><span style={{ color: h.unrealized >= 0 ? COLORS.profit : COLORS.loss }}>{rp(h.unrealized)}</span></Td>
               <Td align="right" mono><span style={{ color: h.unrealizedPct >= 0 ? COLORS.profit : COLORS.loss }}>{pct(h.unrealizedPct)}</span></Td>
+              <Td align="right">
+                <button onClick={() => onSell(h)} className="px-2 py-1 rounded text-xs font-medium" style={{ background: "rgba(240,71,92,0.12)", color: COLORS.loss }}>Jual</button>
+              </Td>
             </tr>
           ))}
         </tbody>
@@ -921,10 +945,11 @@ function ClosedTab({ closed }) {
 /* ---------------------------------------------------------------------- */
 /*  Cash & Dividend                                                        */
 /* ---------------------------------------------------------------------- */
-function CashDividendTab({ cashflows, onAddCashflow, onDeleteCashflow, dividends, onAddDividend, onDeleteDividend }) {
+function CashDividendTab({ cashflows, onAddCashflow, onDeleteCashflow, dividends, onAddDividend, onDeleteDividend, cashBalance }) {
   const today = new Date().toISOString().slice(0, 10);
   const [cf, setCf] = useState({ date: today, type: "DEPOSIT", amount: "", note: "" });
   const [dv, setDv] = useState({ code: "", cumDate: today, payDate: today, perShare: "", lot: "", note: "" });
+  const insufficientWithdraw = cf.type === "WITHDRAW" && Number(cf.amount) > 0 && Number(cf.amount) > cashBalance;
   const submitCf = (e) => { e.preventDefault(); if (!cf.amount) return; onAddCashflow({ ...cf, amount: Number(cf.amount) }); setCf({ ...cf, amount: "", note: "" }); };
   const submitDv = (e) => { e.preventDefault(); if (!dv.code || !dv.perShare || !dv.lot) return; onAddDividend({ ...dv, code: dv.code.toUpperCase(), perShare: Number(dv.perShare), lot: Number(dv.lot) }); setDv({ ...dv, code: "", perShare: "", lot: "", note: "" }); };
   const cfSorted = [...cashflows].sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -933,7 +958,10 @@ function CashDividendTab({ cashflows, onAddCashflow, onDeleteCashflow, dividends
   return (
     <div className="flex flex-col gap-8">
       <div>
-        <h3 className="text-sm font-medium mb-3" style={{ color: COLORS.textDim }}>Arus Kas RDN</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium" style={{ color: COLORS.textDim }}>Arus Kas RDN</h3>
+          <span className="text-xs" style={{ color: COLORS.textDim }}>Saldo Kas Saat Ini: <span style={{ color: COLORS.text, fontFamily: "'IBM Plex Mono', monospace" }}>{rp(cashBalance)}</span></span>
+        </div>
         <Panel className="p-4 mb-3">
           <form onSubmit={submitCf} className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
             <Field label="Tanggal"><input type="date" className={inputCls} style={inputStyle()} value={cf.date} onChange={(e) => setCf({ ...cf, date: e.target.value })} /></Field>
@@ -941,6 +969,11 @@ function CashDividendTab({ cashflows, onAddCashflow, onDeleteCashflow, dividends
             <Field label="Jumlah (Rp)"><input type="number" className={inputCls} style={inputStyle()} placeholder="5000000" value={cf.amount} onChange={(e) => setCf({ ...cf, amount: e.target.value })} /></Field>
             <Btn type="submit"><Plus className="w-4 h-4" /> Tambah</Btn>
             <div className="col-span-2 sm:col-span-4"><Field label="Catatan"><input className={inputCls} style={inputStyle()} value={cf.note} onChange={(e) => setCf({ ...cf, note: e.target.value })} /></Field></div>
+            {insufficientWithdraw && (
+              <div className="col-span-2 sm:col-span-4 text-xs" style={{ color: COLORS.loss }}>
+                ⚠ Saldo kas tidak cukup untuk withdrawal ini (saldo saat ini: {rp(cashBalance)}). Anda tetap bisa menyimpannya jika ini transaksi historis.
+              </div>
+            )}
           </form>
         </Panel>
         <Panel className="overflow-x-auto">
